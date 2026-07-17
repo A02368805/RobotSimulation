@@ -9,9 +9,10 @@ import observer.Observer
 /**
  * Navigates toward the red ball using vision, sonar, and collision sensors.
  *
- * Sonar and vision observers only cache their readings. The collision observer is the sole
- * control-loop heartbeat: it caches its reading and calls [updateMovement] with all three
- * cached values current.
+ * Every relevant observer updates its cached reading and immediately calls [updateMovement]
+ * so the program reacts to any sensor change without waiting for another sensor to fire.
+ * Decision logic is centralized in [updateMovement], which evaluates all three cached values
+ * and applies the appropriate command through [drive].
  */
 class BallFinderProgram : RobotProgram {
 
@@ -37,12 +38,12 @@ class BallFinderProgram : RobotProgram {
         latestSonar = safeDistance + 1.0
         colliding = false
 
-        val vo = Observer<Color>  { latestVision = it }
-        val so = Observer<Double> { latestSonar  = it }
-        val co = Observer<Boolean> { colliding = it; updateMovement() }
+        val vo = Observer<Color>   { latestVision = it; updateMovement() }
+        val so = Observer<Double>  { latestSonar  = it; updateMovement() }
+        val co = Observer<Boolean> { colliding    = it; updateMovement() }
 
-        visionObserver   = vo
-        sonarObserver    = so
+        visionObserver    = vo
+        sonarObserver     = so
         collisionObserver = co
 
         robot.sensors.vision.subscribe(vo)
@@ -72,10 +73,10 @@ class BallFinderProgram : RobotProgram {
     private fun updateMovement() {
         val vision = latestVision
         when {
-            colliding || latestSonar <= safeDistance      -> drive(-turnSpeed, turnSpeed)
-            vision != null && isTargetRed(vision)         -> drive(speed, speed)
-            vision != null && isBlockingSurface(vision)   -> drive(-turnSpeed, turnSpeed)
-            else                                          -> drive(speed, speed)
+            colliding || latestSonar <= safeDistance    -> drive(-turnSpeed, turnSpeed)
+            vision != null && isTargetRed(vision)       -> drive(speed, speed)
+            vision != null && isBlockingSurface(vision) -> drive(-turnSpeed, turnSpeed)
+            else                                        -> drive(speed, speed)
         }
     }
 

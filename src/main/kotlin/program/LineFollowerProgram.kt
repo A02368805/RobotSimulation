@@ -8,9 +8,9 @@ import observer.Observer
 /**
  * Follows a floor line using three line sensors (left / center / right).
  *
- * The right-sensor observer is the sole control-loop heartbeat: it caches its reading and
- * calls [updateMovement]. The left and center observers only cache their readings so that
- * all three values are current when the heartbeat fires.
+ * Every sensor observer updates its cached Boolean and immediately calls [updateMovement],
+ * so the program reacts to any line-sensor change without waiting for another sensor to fire.
+ * All steering decisions are centralized in [updateMovement].
  */
 class LineFollowerProgram : RobotProgram {
 
@@ -33,13 +33,13 @@ class LineFollowerProgram : RobotProgram {
     override fun startProgram(robot: RobotApi) {
         robotApi = robot
 
-        val lo = Observer<Boolean> { leftOnLine = it }
-        val co = Observer<Boolean> { centerOnLine = it }
-        val ro = Observer<Boolean> { rightOnLine = it; updateMovement() }
+        val lo = Observer<Boolean> { leftOnLine   = it; updateMovement() }
+        val co = Observer<Boolean> { centerOnLine = it; updateMovement() }
+        val ro = Observer<Boolean> { rightOnLine  = it; updateMovement() }
 
-        leftObserver = lo
+        leftObserver   = lo
         centerObserver = co
-        rightObserver = ro
+        rightObserver  = ro
 
         robot.sensors.lineLeft.subscribe(lo)
         robot.sensors.lineCenter.subscribe(co)
@@ -59,10 +59,10 @@ class LineFollowerProgram : RobotProgram {
             api.perform(SetTrackVelocitiesCommand(api.actuator, 0.0, 0.0))
         }
 
-        leftObserver = null
+        leftObserver   = null
         centerObserver = null
-        rightObserver = null
-        robotApi = null
+        rightObserver  = null
+        robotApi       = null
     }
 
     private fun updateMovement() {
@@ -76,7 +76,7 @@ class LineFollowerProgram : RobotProgram {
             leftOnLine  &&  centerOnLine &&  rightOnLine -> drive(speed, speed)
             else -> {
                 // All sensors off: continue the last inferred turn direction.
-                val curLeft = api.actuator.leftTrackVelocity
+                val curLeft  = api.actuator.leftTrackVelocity
                 val curRight = api.actuator.rightTrackVelocity
                 if (curRight > curLeft) drive(-turnSpeed, turnSpeed) else drive(turnSpeed, -turnSpeed)
             }

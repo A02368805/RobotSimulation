@@ -6,21 +6,27 @@ import command.SetTrackVelocitiesCommand
 import observer.Observer
 
 /**
- * Climbs the temperature gradient by tracking sensor readings through the collision observer,
- * which is the sole control-loop heartbeat.
+ * Climbs the temperature gradient toward the heat source.
  *
- * The temperature observer only shifts and caches readings; no movement decision is made
- * there. The collision observer caches its reading and then calls [updateMovement], which
- * applies the full priority chain once per tick with all cached values current.
+ * Both the temperature and collision observers update their cached state and immediately
+ * call [applyMovement] through their respective handlers:
+ *
+ * - [respondToTemperature]: shifts the temperature readings, recalculates the desired
+ *   temperature-based velocities via [updateTemperatureDecision], then applies movement.
+ * - [respondToCollision]: caches the collision flag, then applies movement.
+ *
+ * [applyMovement] uses collision-avoidance velocities while colliding and resumes the most
+ * recently calculated temperature-based velocities the moment collision clears, without
+ * re-evaluating the temperature trend.
  */
 class TemperatureSeekerProgram : RobotProgram {
 
     override val name = "Temperature Seeker"
 
-    private val speed = 100.0
-    private val turnSpeed = 75.0
+    private val speed       = 100.0
+    private val turnSpeed   = 75.0
     private val hotThreshold = 92.0
-    private val epsilon = 0.05
+    private val epsilon     = 0.05
     private val curveFactor = 0.25
 
     private var robotApi: RobotApi? = null
@@ -28,29 +34,29 @@ class TemperatureSeekerProgram : RobotProgram {
     private var currentTemperature: Double? = null
     private var previousTemperature: Double? = null
     private var colliding = false
-    private var searchDirection = 1  // 1 = right arc/pivot, -1 = left arc/pivot
+    private var searchDirection = 1   // 1 = right arc/pivot, -1 = left arc/pivot
+
+    /** Most recently calculated temperature-based desired velocities. */
+    private var desiredLeft  = speed
+    private var desiredRight = speed
 
     private var temperatureObserver: Observer<Double>? = null
     private var collisionObserver: Observer<Boolean>? = null
 
     override fun startProgram(robot: RobotApi) {
         robotApi = robot
-        currentTemperature = null
+        currentTemperature  = null
         previousTemperature = null
-        colliding = false
+        colliding       = false
         searchDirection = 1
+        desiredLeft     = speed
+        desiredRight    = speed
 
-        val to = Observer<Double> { value ->
-            previousTemperature = currentTemperature
-            currentTemperature = value
-        }
-        val co = Observer<Boolean> { value ->
-            colliding = value
-            updateMovement()
-        }
+        val to = Observer<Double>  { respondToTemperature(it) }
+        val co = Observer<Boolean> { respondToCollision(it) }
 
         temperatureObserver = to
-        collisionObserver = co
+        collisionObserver   = co
 
         robot.sensors.temperature.subscribe(to)
         robot.sensors.collision.subscribe(co)
@@ -68,35 +74,64 @@ class TemperatureSeekerProgram : RobotProgram {
         }
 
         temperatureObserver = null
-        collisionObserver = null
-        robotApi = null
+        collisionObserver   = null
+        robotApi            = null
     }
 
-    private fun updateMovement() {
-        if (colliding) {
-            if (searchDirection > 0) drive(-turnSpeed, turnSpeed) else drive(turnSpeed, -turnSpeed)
-            return
-        }
+    private fun respondToTemperature(value: Double) {
+        previousTemperature = currentTemperature
+        currentTemperature  = value
+        updateTemperatureDecision()
+        applyMovement()
+    }
 
-        val curr = currentTemperature ?: run { drive(speed, speed); return }
+    private fun respondToCollision(value: Boolean) {
+        colliding = value
+        applyMovement()
+    }
+
+    /**
+     * Recalculates [desiredLeft] and [desiredRight] from the latest temperature readings.
+     * Only called from [respondToTemperature], so [searchDirection] is never altered by
+     * collision callbacks.
+     */
+    private fun updateTemperatureDecision() {
+        val curr = currentTemperature ?: run { setDesiredMovement(speed, speed); return }
 
         if (curr >= hotThreshold) {
-            drive(0.0, 0.0)
+            setDesiredMovement(0.0, 0.0)
             return
         }
 
-        val prev = previousTemperature ?: run { drive(speed, speed); return }
+        val prev = previousTemperature ?: run { setDesiredMovement(speed, speed); return }
 
         val delta = curr - prev
         when {
-            delta > epsilon  -> drive(speed, speed)
+            delta > epsilon  -> setDesiredMovement(speed, speed)
             delta < -epsilon -> {
-                if (searchDirection > 0) drive(speed * curveFactor, speed)
-                else                     drive(speed, speed * curveFactor)
+                if (searchDirection > 0) setDesiredMovement(speed * curveFactor, speed)
+                else                     setDesiredMovement(speed, speed * curveFactor)
                 searchDirection *= -1
             }
-            // Effectively equal: retain current velocity — no duplicate command issued.
+            // Effectively equal: retain the most recently stored desired velocity.
         }
+    }
+
+    /**
+     * Issues a movement command for the current state: collision avoidance when colliding,
+     * or the most recently calculated temperature-based velocities otherwise.
+     */
+    private fun applyMovement() {
+        if (colliding) {
+            if (searchDirection > 0) drive(-turnSpeed, turnSpeed) else drive(turnSpeed, -turnSpeed)
+        } else {
+            drive(desiredLeft, desiredRight)
+        }
+    }
+
+    private fun setDesiredMovement(left: Double, right: Double) {
+        desiredLeft  = left
+        desiredRight = right
     }
 
     private fun drive(left: Double, right: Double) {
